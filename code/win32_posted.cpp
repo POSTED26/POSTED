@@ -3,76 +3,111 @@
     Date: 8/5/2018
 
     This is the entry point.
+
+    So far this file has an entry point, it creates a window
+    that processes a few messages with a callback function.
+    This file also creates a buffer to fill and them paint to
+    screen.
     =========================================================*/
 
 #include <windows.h>
+#include <stdint.h>
 
+// Definitions. 
 #define internal static
 #define local_persist static
 #define global_var static
+
+
 
 global_var bool isRunning; // TODO: this is a global for now.
 
 global_var BITMAPINFO BitmapInfo;
 global_var void *BitmapMemory;
-global_var HBITMAP BitmapHandle;
-global_var HDC BitmapDeviceContext;
+
+global_var int BitmapWidth;
+global_var int BitmapHeight;
+global_var int BytesPerPixel = 4;
+
+
+
+internal void RenderGradient(int XOffset, int YOffset)
+{
+    int Width = BitmapWidth;
+    int Height = BitmapHeight;
+
+    int Pitch = Width * BytesPerPixel;
+    uint8_t *Row = (uint8_t *)BitmapMemory;
+    for(int Y = 0; Y < BitmapHeight; ++Y)
+    {
+        uint32_t *Pixel = (uint32_t *)Row;
+        for(int X = 0; X < BitmapWidth; ++X)
+        { // Pixels in memory BB GG RR XX
+
+            uint8_t Blue = (X + XOffset);
+            uint8_t Green = (Y + YOffset);
+            uint8_t Red = ((uint8_t)(X + XOffset) / 2) + ((uint8_t)(Y + -YOffset) / 2);
+
+            *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
+
+        }
+        Row += Pitch;
+    }
+    
+}
+
 
 
 internal void Win32ResizeDIBSection(int Width, int Height)
 {
     //TODO: maybe free first , free after, then free first if fails
+ 
 
-    
-    
-    if(BitmapHandle)
+    if(BitmapMemory)
     {
-        DeleteObject(BitmapHandle);
+        VirtualFree(BitmapMemory, 0, MEM_RELEASE);
     }
-    
-    if(!BitmapDeviceContext)
-    {
-        //TODO: should we recreate under certain circumstances???
-        BitmapDeviceContext = CreateCompatibleDC(0);
-    }
-    
+
+    BitmapWidth = Width;
+    BitmapHeight = Height;
+
+    // Filling out BitmapInfo header with important information
     BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
-    BitmapInfo.bmiHeader.biWidth = Width;
-    BitmapInfo.bmiHeader.biHeight = Height;
+    BitmapInfo.bmiHeader.biWidth = BitmapWidth;
+    BitmapInfo.bmiHeader.biHeight = -BitmapHeight;
     BitmapInfo.bmiHeader.biPlanes = 1;
     BitmapInfo.bmiHeader.biBitCount = 32;
     BitmapInfo.bmiHeader.biCompression = BI_RGB;
-    // BitmapInfo.biSizeImage = 0;
-    // BitmapInfo.biXPelsPerMeter = 0;
-    // BitmapInfo.biYPelsPerMeter = 0;
-    // BitmapInfo.biClrUsed = 0;
-    // BitmapInfo.biClrImportant = 0;
+
+    //int BytesPerPixel = 4;
+    int BitmapMemorySize = (Width * Height) * BytesPerPixel;
+    BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
 
+    //TODO: Possibly clear to black. It kind of seem like it does already but who knows.
 
-    BitmapHandle = CreateDIBSection(BitmapDeviceContext,
-                                    &BitmapInfo, 
-                                    DIB_RGB_COLORS, 
-                                    &BitmapMemory, 
-                                    0,
-                                    0);
-
-    
 }
 
-internal void Win32UpdateWindow(HDC DeviceContext, int X, int Y, int Width, int Height)
+// Called in the paint message in the callback, used to take what is in our buffer and 
+// put it on the screen.
+internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int X, int Y, int Width, int Height)
 {
+    int WindowWidth = ClientRect->right - ClientRect->left;
+    int WindowHeight = ClientRect->bottom - ClientRect->top;
     StretchDIBits(DeviceContext,
-                  X, Y, Width, Height,          // Destination
-                  X, Y, Width, Height,          // Source
+                //   X, Y, Width, Height,          // Destination
+                //   X, Y, Width, Height,          // Source
+                  0, 0, BitmapWidth, BitmapHeight,
+                  0, 0, WindowWidth, WindowHeight,
                   BitmapMemory, 
                   &BitmapInfo, DIB_RGB_COLORS, SRCCOPY);
 }
 
+// Processes the messages sent to the window
 LRESULT CALLBACK Win32MainWindowCallback(HWND Window,
-                                    UINT Message,
-                                    WPARAM WParam,
-                                    LPARAM LParam)
+                                         UINT Message,
+                                         WPARAM WParam,
+                                         LPARAM LParam)
 {
     LRESULT Result = 0;
 
@@ -114,8 +149,11 @@ LRESULT CALLBACK Win32MainWindowCallback(HWND Window,
             int Width = Paint.rcPaint.right - Paint.rcPaint.left;
             int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
             local_persist DWORD Operation = WHITENESS;
-            Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
-            PatBlt(DeviceContext, X, Y, Width, Height, Operation);
+
+            RECT ClientRect;
+            GetClientRect(Window, &ClientRect);
+
+            Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
             EndPaint(Window, &Paint);
 
         } break;
@@ -131,7 +169,7 @@ LRESULT CALLBACK Win32MainWindowCallback(HWND Window,
 }
 
 
-//Entry point into the program
+// Entry point into the program
 int CALLBACK WinMain(HINSTANCE Instance,
                      HINSTANCE PrevInstance,
                      LPSTR CommandLine,
@@ -158,7 +196,7 @@ int CALLBACK WinMain(HINSTANCE Instance,
 
     if(RegisterClassA(&WindowClass))
     {
-        HWND WindowHandle = CreateWindowExA(0,
+        HWND Window = CreateWindowExA(0,
                                            WindowClass.lpszClassName,
                                            "POSTED",
                                            WS_OVERLAPPEDWINDOW|WS_VISIBLE,
@@ -170,22 +208,36 @@ int CALLBACK WinMain(HINSTANCE Instance,
                                            0,
                                            Instance,
                                            0);
-        if(WindowHandle)
+        if(Window)
         {
             isRunning = true;
-            MSG Message;
+            int XOffset = 0;
+            int YOffset = 0;
             while(isRunning) //loop forever till we get a positve message from reuslt
             {
-                BOOL MessageResult = GetMessageA(&Message, 0, 0, 0);
-                if(MessageResult > 0)
+                
+                MSG Message;
+                while(PeekMessageA(&Message, 0, 0, 0, PM_REMOVE))
                 {
+
+                    if(Message.message == WM_QUIT)
+                    {
+                        isRunning = false;
+                    }
                     TranslateMessage(&Message);
                     DispatchMessageA(&Message);
                 }
-                else
-                {
-                    break;
-                }
+                RenderGradient(XOffset, YOffset);
+                HDC DeviceContext = GetDC(Window);
+
+                RECT ClientRect;
+                GetClientRect(Window, &ClientRect);
+                int WindowWidth = ClientRect.right - ClientRect.left;
+                int WindowHeight = ClientRect.bottom - ClientRect.top;
+                Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, WindowWidth, WindowHeight);
+                ReleaseDC(Window, DeviceContext);
+                ++XOffset;
+                --YOffset;
             }
         }
         else
